@@ -170,7 +170,7 @@ public abstract class ExportHelper {
    * @return Iso8601 date time format.
    */
   private static final SimpleDateFormat iso() {
-    SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
+    SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     f.setTimeZone(TimeZone.getTimeZone("UTC"));
     return f;
   }
