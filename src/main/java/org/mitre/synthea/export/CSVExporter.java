@@ -293,36 +293,36 @@ public class CSVExporter {
         + "PREFIX,FIRST,LAST,SUFFIX,MAIDEN,MARITAL,RACE,ETHNICITY,GENDER,BIRTHPLACE,"
         + "ADDRESS,CITY,STATE,COUNTY,ZIP,LAT,LON,HEALTHCARE_EXPENSES,HEALTHCARE_COVERAGE");
     patients.write(NEWLINE);
-    allergies.write("START,STOP,PATIENT,ENCOUNTER,CODE,SYSTEM,DESCRIPTION,TYPE,CATEGORY,"
+    allergies.write("START,STOP,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,SYSTEM,DESCRIPTION,TYPE,CATEGORY,"
         + "REACTION1,DESCRIPTION1,SEVERITY1,REACTION2,DESCRIPTION2,SEVERITY2");
     allergies.write(NEWLINE);
     medications.write(
-        "START,STOP,PATIENT,PAYER,ENCOUNTER,CODE,DESCRIPTION,BASE_COST,PAYER_COVERAGE,DISPENSES,"
-        + "TOTALCOST,REASONCODE,REASONDESCRIPTION");
+        "START,STOP,PATIENT,PAYER,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION,BASE_COST,PAYER_COVERAGE,DISPENSES,"
+        + "TOTALCOST,REASONCODE_SYSTEM,REASONCODE,REASONDESCRIPTION");
     medications.write(NEWLINE);
-    conditions.write("START,STOP,PATIENT,ENCOUNTER,CODE,DESCRIPTION");
+    conditions.write("START,STOP,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION");
     conditions.write(NEWLINE);
     careplans.write(
-        "Id,START,STOP,PATIENT,ENCOUNTER,CODE,DESCRIPTION,REASONCODE,REASONDESCRIPTION");
+        "Id,START,STOP,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION,REASONCODE_SYSTEM,REASONCODE,REASONDESCRIPTION");
     careplans.write(NEWLINE);
-    observations.write("DATE,PATIENT,ENCOUNTER,CATEGORY,CODE,DESCRIPTION,VALUE,UNITS,TYPE");
+    observations.write("DATE,PATIENT,ENCOUNTER,CODE_SYSTEM,CATEGORY,CODE,DESCRIPTION,VALUE,UNITS,TYPE");
     observations.write(NEWLINE);
-    procedures.write("START,STOP,PATIENT,ENCOUNTER,CODE,DESCRIPTION,BASE_COST,"
-        + "REASONCODE,REASONDESCRIPTION");
+    procedures.write("START,STOP,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION,BASE_COST,"
+        + "REASONCODE_SYSTEM,REASONCODE,REASONDESCRIPTION");
     procedures.write(NEWLINE);
-    immunizations.write("DATE,PATIENT,ENCOUNTER,CODE,DESCRIPTION,BASE_COST");
+    immunizations.write("DATE,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION,BASE_COST");
     immunizations.write(NEWLINE);
     encounters.write(
-        "Id,START,STOP,PATIENT,ORGANIZATION,PROVIDER,PAYER,ENCOUNTERCLASS,CODE,DESCRIPTION,"
-        + "BASE_ENCOUNTER_COST,TOTAL_CLAIM_COST,PAYER_COVERAGE,REASONCODE,REASONDESCRIPTION");
+        "Id,START,STOP,PATIENT,ORGANIZATION,PROVIDER,PAYER,ENCOUNTERCLASS,CODE_SYSTEM,CODE,DESCRIPTION,"
+        + "BASE_ENCOUNTER_COST,TOTAL_CLAIM_COST,PAYER_COVERAGE,REASONCODE_SYSTEM,REASONCODE,REASONDESCRIPTION");
     encounters.write(NEWLINE);
-    imagingStudies.write("Id,DATE,PATIENT,ENCOUNTER,SERIES_UID,BODYSITE_CODE,BODYSITE_DESCRIPTION,"
-        + "MODALITY_CODE,MODALITY_DESCRIPTION,INSTANCE_UID,SOP_CODE,SOP_DESCRIPTION,"
+    imagingStudies.write("Id,DATE,PATIENT,ENCOUNTER,SERIES_UID,BODYSITE_CODE_SYSTEM,BODYSITE_CODE,BODYSITE_DESCRIPTION,"
+        + "MODALITY_CODE_SYSTEM,MODALITY_CODE,MODALITY_DESCRIPTION,SOP_CODE_SYSTEM,SOP_CODE,SOP_DESCRIPTION,"
         + "PROCEDURE_CODE");
     imagingStudies.write(NEWLINE);
-    devices.write("START,STOP,PATIENT,ENCOUNTER,CODE,DESCRIPTION,UDI");
+    devices.write("START,STOP,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION,UDI");
     devices.write(NEWLINE);
-    supplies.write("DATE,PATIENT,ENCOUNTER,CODE,DESCRIPTION,QUANTITY");
+    supplies.write("DATE,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION,QUANTITY");
     supplies.write(NEWLINE);
 
     organizations.write("Id,NAME,ADDRESS,CITY,STATE,ZIP,LAT,LON,PHONE,REVENUE,UTILIZATION");
@@ -634,8 +634,8 @@ public class CSVExporter {
    */
   private String encounter(RandomNumberGenerator rand, String personID,
           Encounter encounter) throws IOException {
-    // Id,START,STOP,PATIENT,ORGANIZATION,PROVIDER,PAYER,ENCOUNTERCLASS,CODE,DESCRIPTION,
-    // BASE_ENCOUNTER_COST,TOTAL_CLAIM_COST,PAYER_COVERAGE,REASONCODE,REASONDESCRIPTION
+    // Id,START,STOP,PATIENT,ORGANIZATION,PROVIDER,PAYER,ENCOUNTERCLASS,CODE_SYSTEM,CODE,DESCRIPTION,
+    // BASE_ENCOUNTER_COST,TOTAL_CLAIM_COST,PAYER_COVERAGE,REASONCODE_SYSTEM,REASONCODE,REASONDESCRIPTION
     StringBuilder s = new StringBuilder();
 
     String encounterID = rand.randUUID().toString();
@@ -677,7 +677,7 @@ public class CSVExporter {
     }
     // CODE
     Code coding = encounter.codes.get(0);
-    s.append(coding.code).append(',');
+    s.append(coding.system).append(',').append(coding.code).append(',');
     // DESCRIPTION
     s.append(clean(coding.display)).append(',');
     // BASE_ENCOUNTER_COST
@@ -688,9 +688,9 @@ public class CSVExporter {
     s.append(String.format(Locale.US, "%.2f", encounter.claim.getCoveredCost())).append(',');
     // REASONCODE & REASONDESCRIPTION
     if (encounter.reason == null) {
-      s.append(",");
+      s.append(",,");
     } else {
-      s.append(encounter.reason.code).append(',');
+      s.append(encounter.reason.system).append(',').append(encounter.reason.code).append(',');
       s.append(clean(encounter.reason.display));
     }
 
@@ -709,7 +709,7 @@ public class CSVExporter {
    * @throws IOException if any IO error occurs
    */
   private void condition(String personID, String encounterID, Entry condition) throws IOException {
-    // START,STOP,PATIENT,ENCOUNTER,CODE,DESCRIPTION
+    // START,STOP,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION
     StringBuilder s = new StringBuilder();
 
     s.append(dateFromTimestamp(condition.start)).append(',');
@@ -722,7 +722,7 @@ public class CSVExporter {
 
     Code coding = condition.codes.get(0);
 
-    s.append(coding.code).append(',');
+    s.append(coding.system).append(',').append(coding.code).append(',');
     s.append(clean(coding.display));
 
     s.append(NEWLINE);
@@ -739,7 +739,7 @@ public class CSVExporter {
    */
   private void allergy(String personID, String encounterID, HealthRecord.Allergy allergy)
       throws IOException {
-    // START,STOP,PATIENT,ENCOUNTER,CODE,SYSTEM,DESCRIPTION,TYPE,CATEGORY
+    // START,STOP,PATIENT,ENCOUNTER,iCODE_SYSTEM,CODE,SYSTEM,DESCRIPTION,TYPE,CATEGORY
     // REACTION1,DESCRIPTION1,SEVERITY1,
     // REACTION2,DESCRIPTION2,SEVERITY2
     StringBuilder s = new StringBuilder();
@@ -754,7 +754,7 @@ public class CSVExporter {
 
     Code coding = allergy.codes.get(0);
 
-    s.append(coding.code).append(',');
+    s.append(coding.system).append(',').append(coding.code).append(',');
     s.append(getSystemFromURI(coding.system)).append(',');
     s.append(clean(coding.display)).append(',');
     if (allergy.allergyType != null) {
@@ -824,7 +824,7 @@ public class CSVExporter {
       return;
     }
 
-    // DATE,PATIENT,ENCOUNTER,CATEGORY,CODE,DESCRIPTION,VALUE,UNITS
+    // DATE,PATIENT,ENCOUNTER,CATEGORY,CODE_SYSTEM,CODE,DESCRIPTION,VALUE,UNITS
     StringBuilder s = new StringBuilder();
 
     s.append(iso8601Timestamp(observation.start)).append(',');
@@ -837,7 +837,7 @@ public class CSVExporter {
 
     Code coding = observation.codes.get(0);
 
-    s.append(coding.code).append(',');
+    s.append(coding.system).append(',').append(coding.code).append(',');
     s.append(clean(coding.display)).append(',');
 
     String value = ExportHelper.getObservationValue(observation);
@@ -860,7 +860,7 @@ public class CSVExporter {
    */
   private void procedure(String personID, String encounterID,
       Procedure procedure) throws IOException {
-    // START,STOP,PATIENT,ENCOUNTER,CODE,DESCRIPTION,COST,REASONCODE,REASONDESCRIPTION
+    // START,STOP,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION,COST,REASONCODE_SYSTEM,REASONCODE,REASONDESCRIPTION
     StringBuilder s = new StringBuilder();
 
     s.append(iso8601Timestamp(procedure.start)).append(',');
@@ -872,17 +872,17 @@ public class CSVExporter {
     s.append(encounterID).append(',');
     // CODE
     Code coding = procedure.codes.get(0);
-    s.append(coding.code).append(',');
+    s.append(coding.system).append(',').append(coding.code).append(',');
     // DESCRIPTION
     s.append(clean(coding.display)).append(',');
     // BASE_COST
     s.append(String.format(Locale.US, "%.2f", procedure.getCost())).append(',');
     // REASONCODE & REASONDESCRIPTION
     if (procedure.reasons.isEmpty()) {
-      s.append(','); // reason code & desc
+      s.append(",,"); // reason code & desc
     } else {
       Code reason = procedure.reasons.get(0);
-      s.append(reason.code).append(',');
+      s.append(reason.system).append(',').append(reason.code).append(',');
       s.append(clean(reason.display));
     }
 
@@ -903,8 +903,8 @@ public class CSVExporter {
   private void medication(String personID, String encounterID, String payerID,
       Medication medication, long stopTime)
       throws IOException {
-    // START,STOP,PATIENT,PAYER,ENCOUNTER,CODE,DESCRIPTION,
-    // BASE_COST,PAYER_COVERAGE,DISPENSES,TOTALCOST,REASONCODE,REASONDESCRIPTION
+    // START,STOP,PATIENT,PAYER,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION,
+    // BASE_COST,PAYER_COVERAGE,DISPENSES,TOTALCOST,REASONCODE_SYSTEM,REASONCODE,REASONDESCRIPTION
     StringBuilder s = new StringBuilder();
 
     s.append(iso8601Timestamp(medication.start)).append(',');
@@ -917,7 +917,7 @@ public class CSVExporter {
     s.append(encounterID).append(',');
     // CODE
     Code coding = medication.codes.get(0);
-    s.append(coding.code).append(',');
+    s.append(coding.system).append(',').append(coding.code).append(',');
     // DESCRIPTION
     s.append(clean(coding.display)).append(',');
     // BASE_COST
@@ -963,10 +963,10 @@ public class CSVExporter {
     s.append(String.format(Locale.US, "%.2f", totalCost)).append(',');
 
     if (medication.reasons.isEmpty()) {
-      s.append(','); // reason code & desc
+      s.append(",,"); // reason code & desc
     } else {
       Code reason = medication.reasons.get(0);
-      s.append(reason.code).append(',');
+      s.append(reason.system).append(',').append(reason.code).append(',');
       s.append(clean(reason.display));
     }
 
@@ -984,7 +984,7 @@ public class CSVExporter {
    */
   private void immunization(String personID, String encounterID,
       Entry immunization) throws IOException {
-    // DATE,PATIENT,ENCOUNTER,CODE,DESCRIPTION,BASE_COST
+    // DATE,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION,BASE_COST
     StringBuilder s = new StringBuilder();
 
     s.append(iso8601Timestamp(immunization.start)).append(',');
@@ -992,7 +992,7 @@ public class CSVExporter {
     s.append(encounterID).append(',');
     // CODE
     Code coding = immunization.codes.get(0);
-    s.append(coding.code).append(',');
+    s.append(coding.system).append(',').append(coding.code).append(',');
     // DESCRIPTION
     s.append(clean(coding.display)).append(',');
     // BASE_COST
@@ -1013,7 +1013,7 @@ public class CSVExporter {
    */
   private String careplan(RandomNumberGenerator rand, String personID, String encounterID,
       CarePlan careplan) throws IOException {
-    // Id,START,STOP,PATIENT,ENCOUNTER,CODE,DESCRIPTION,REASONCODE,REASONDESCRIPTION
+    // Id,START,STOP,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION,REASONCODE_SYSTEM,REASONCODE,REASONDESCRIPTION
     StringBuilder s = new StringBuilder();
 
     String careplanID = rand.randUUID().toString();
@@ -1028,14 +1028,14 @@ public class CSVExporter {
 
     Code coding = careplan.codes.get(0);
 
-    s.append(coding.code).append(',');
+    s.append(coding.system).append(',').append(coding.code).append(',');
     s.append(coding.display).append(',');
 
     if (careplan.reasons.isEmpty()) {
-      s.append(','); // reason code & desc
+      s.append(",,"); // reason code & desc
     } else {
       Code reason = careplan.reasons.get(0);
-      s.append(reason.code).append(',');
+      s.append(reason.system).append(',').append(reason.code).append(',');
       s.append(clean(reason.display));
     }
     s.append(NEWLINE);
@@ -1056,8 +1056,8 @@ public class CSVExporter {
    */
   private String imagingStudy(RandomNumberGenerator rand, String personID, String encounterID,
       ImagingStudy imagingStudy) throws IOException {
-    // Id,DATE,PATIENT,ENCOUNTER,SERIES_UID,BODYSITE_CODE,BODYSITE_DESCRIPTION,
-    // MODALITY_CODE,MODALITY_DESCRIPTION,INSTANCE_UID,SOP_CODE,SOP_DESCRIPTION,PROCEDURE_CODE
+    // Id,DATE,PATIENT,ENCOUNTER,SERIES_UID,BODYSITE_CODE_SYSTEM,BODYSITE_CODE,BODYSITE_DESCRIPTION,
+    // MODALITY_CODE_SYSTEM,MODALITY_CODE,MODALITY_DESCRIPTION,SOP_CODE_SYSTEM,SOP_CODE,SOP_DESCRIPTION,PROCEDURE_CODE_SYSTEM,PROCEDURE_CODE,PROCEDURE_DESCRIPTION
     StringBuilder s = new StringBuilder();
 
     String studyID = rand.randUUID().toString();
@@ -1076,15 +1076,17 @@ public class CSVExporter {
 
         s.append(seriesDicomUid).append(',');
 
-        s.append(bodySite.code).append(',');
+        s.append(bodySite.system).append(',').append(bodySite.code).append(',');
         s.append(bodySite.display).append(',');
 
-        s.append(modality.code).append(',');
+        s.append(modality.system).append(',').append(modality.code).append(',');
         s.append(modality.display).append(',');
 
         s.append(instanceDicomUid).append(',');
+    // s.append(sopClass.system).append(',').append(sopClass.code).append(',');
+    // s.append(sopClass.display);
 
-        s.append(sopClass.code).append(',');
+        s.append(sopClass.system).append(',').append(sopClass.code).append(',');
         s.append(sopClass.display).append(',');
         s.append(imagingStudy.codes.get(0).code);
 
@@ -1107,7 +1109,7 @@ public class CSVExporter {
    */
   private void device(String personID, String encounterID, Device device)
       throws IOException {
-    // START,STOP,PATIENT,ENCOUNTER,CODE,DESCRIPTION,UDI
+    // START,STOP,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION,UDI
     StringBuilder s = new StringBuilder();
 
     s.append(iso8601Timestamp(device.start)).append(',');
@@ -1120,7 +1122,7 @@ public class CSVExporter {
     s.append(encounterID).append(',');
 
     Code code = device.codes.get(0);
-    s.append(code.code).append(',');
+    s.append(code.system).append(',').append(code.code).append(',');
     s.append(clean(code.display)).append(',');
 
     s.append(device.udi);
@@ -1140,7 +1142,7 @@ public class CSVExporter {
    */
   private void supply(String personID, String encounterID, Encounter encounter, Supply supply)
           throws IOException {
-    // DATE,PATIENT,ENCOUNTER,CODE,DESCRIPTION,QUANTITY
+    // DATE,PATIENT,ENCOUNTER,CODE_SYSTEM,CODE,DESCRIPTION,QUANTITY
     StringBuilder s = new StringBuilder();
 
     s.append(dateFromTimestamp(supply.start)).append(',');
@@ -1148,6 +1150,7 @@ public class CSVExporter {
     s.append(encounterID).append(',');
 
     Code code = supply.codes.get(0);
+    s.append(code.system).append(',');
     s.append(code.code).append(',');
     s.append(clean(code.display)).append(',');
 
