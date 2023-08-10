@@ -8,84 +8,50 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
+import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
 import org.mitre.synthea.export.JSONSkip;
-import org.mitre.synthea.helpers.Config;
-import org.mitre.synthea.helpers.SimpleCSV;
 import org.mitre.synthea.helpers.Utilities;
-import org.mitre.synthea.modules.HealthInsuranceModule;
-import org.mitre.synthea.world.agents.behaviors.IPayerAdjustment;
-import org.mitre.synthea.world.agents.behaviors.IPayerFinder;
-import org.mitre.synthea.world.agents.behaviors.PayerAdjustmentFixed;
-import org.mitre.synthea.world.agents.behaviors.PayerAdjustmentNone;
-import org.mitre.synthea.world.agents.behaviors.PayerAdjustmentRandom;
-import org.mitre.synthea.world.agents.behaviors.PayerFinderBestRates;
-import org.mitre.synthea.world.agents.behaviors.PayerFinderRandom;
+import org.mitre.synthea.world.agents.behaviors.payeradjustment.IPayerAdjustment;
+import org.mitre.synthea.world.concepts.Claim;
 import org.mitre.synthea.world.concepts.Claim.ClaimEntry;
 import org.mitre.synthea.world.concepts.HealthRecord;
 import org.mitre.synthea.world.concepts.HealthRecord.Encounter;
-import org.mitre.synthea.world.concepts.HealthRecord.EncounterType;
 import org.mitre.synthea.world.concepts.HealthRecord.Entry;
 import org.mitre.synthea.world.concepts.HealthRecord.Immunization;
 import org.mitre.synthea.world.concepts.HealthRecord.Medication;
 import org.mitre.synthea.world.concepts.HealthRecord.Procedure;
-import org.mitre.synthea.world.geography.Location;
+import org.mitre.synthea.world.concepts.healthinsurance.InsurancePlan;
 
 public class Payer implements Serializable {
 
-  /* ArrayList of all Private Payers imported. */
-  private static List<Payer> privatePayers = new ArrayList<Payer>();
-  /* Map of all Government Payers imported. */
-  private static Map<String, Payer> governmentPayers = new HashMap<String,Payer>();
-  /* No Insurance Payer. */
-  public static Payer noInsurance;
-
-  /* U.S. States loaded. */
-  private static Set<String> statesLoaded = new HashSet<String>();
-
-  /* Payer Finder. */
-  private static IPayerFinder payerFinder;
-  // Payer selection algorithm choices:
-  private static final String RANDOM = "random";
-  private static final String BESTRATE = "best_rate";
-
-  /* Payer Adjustment strategy. */
+  // Payer Adjustment strategy.
   @JSONSkip
   private IPayerAdjustment payerAdjustment;
-  // Payer adjustment algorithm choices:
-  private static final String NONE = "none";
-  private static final String FIXED = "fixed";
 
   /* Payer Attributes. */
   private final Map<String, Object> attributes;
   private final String name;
   public final String uuid;
-  private double deductible;
-  private double defaultCopay;
-  private double defaultCoinsurance;
-  private double monthlyPremium;
-  private String ownership;
+  private final List<InsurancePlan> plans;
+  private final String ownership;
+  private final int planLinkId;
+
   // The States that this payer covers & operates in.
-  private Set<String> statesCovered;
-  // The services that this payer covers. May be moved to a potential plans class.
-  private Set<String> servicesCovered;
+  private final Set<String> statesCovered;
 
   /* Payer Statistics. */
-  private double revenue;
-  private double costsCovered;
-  private double costsUncovered;
+  private BigDecimal revenue;
+  private BigDecimal costsCovered;
+  private BigDecimal costsUncovered;
   private double totalQOLS; // Total customer quality of life scores.
   // Unique utilizers of Payer, by Person ID, with number of utilizations per Person.
   private final Map<String, AtomicInteger> customerUtilization;
@@ -143,238 +109,36 @@ public class Payer implements Serializable {
   }
 
   /**
-   * Payer Constructor.
+   * Payer constructor.
+   * @param name  The name of the payer.
+   * @param id  The payer ID.
+   * @param statesCovered The list of states covered.
+   * @param ownership The type of ownership (private/government).
    */
-  private Payer(String name, String id) {
+  public Payer(String name, int id, Set<String> statesCovered, String ownership) {
     if (name == null || name.isEmpty()) {
-      throw new RuntimeException("ERROR: Payer must have a non-null name.");
+      throw new RuntimeException("ERROR: Payer must have a non-null name. Payer ID: " + id + ".");
     }
+    // Initialize attributes.
     this.name = name;
+    this.planLinkId = id;
     this.uuid = UUID.nameUUIDFromBytes((id + this.name).getBytes()).toString();
+    this.statesCovered = statesCovered;
+    this.plans = new ArrayList<InsurancePlan>();
+    this.ownership = ownership;
     this.attributes = new LinkedTreeMap<>();
+
+    // Initial tracking values.
     this.entryUtilization = HashBasedTable.create();
     this.customerUtilization = new HashMap<String, AtomicInteger>();
-    this.costsCovered = 0.0;
-    this.costsUncovered = 0.0;
-    this.revenue = 0.0;
+    this.costsCovered = Claim.ZERO_CENTS;
+    this.costsUncovered = Claim.ZERO_CENTS;
+    this.revenue = Claim.ZERO_CENTS;
     this.totalQOLS = 0.0;
   }
 
-  /**
-   * Load into cache the list of payers for a state.
-   *
-   * @param location the state being loaded.
-   */
-  public static void loadPayers(Location location) {
-
-    // Build the Payer Finder
-    payerFinder = buildPayerFinder();
-
-    if (!statesLoaded.contains(location.state)
-        || !statesLoaded.contains(Location.getAbbreviation(location.state))
-        || !statesLoaded.contains(Location.getStateName(location.state))) {
-      try {
-        String payerFile
-            = Config.get("generate.payers.insurance_companies.default_file");
-        loadPayers(location, payerFile);
-
-        statesLoaded.add(location.state);
-        statesLoaded.add(Location.getAbbreviation(location.state));
-        statesLoaded.add(Location.getStateName(location.state));
-      } catch (IOException e) {
-        System.err.println("ERROR: unable to load payers for state: " + location.state);
-        e.printStackTrace();
-      }
-    }
-  }
-
-  /**
-   * Read the payers from the given resource file, only importing the ones for the
-   * given state.
-   *
-   * @param location the state being loaded
-   * @param fileName Location of the file, relative to src/main/resources
-   * @throws IOException if the file cannot be read
-   */
-  private static void loadPayers(Location location, String fileName) throws IOException {
-
-    Payer.loadNoInsurance();
-
-    String resource = Utilities.readResource(fileName);
-    Iterator<? extends Map<String, String>> csv = SimpleCSV.parseLineByLine(resource);
-
-    while (csv.hasNext()) {
-      Map<String, String> row = csv.next();
-      String payerStates = row.get("states_covered").toUpperCase();
-      String abbreviation = Location.getAbbreviation(location.state).toUpperCase();
-
-      // For now, only allow one U.S. state at a time.
-      if (payerStates.contains(abbreviation) || payerStates.contains("*")) {
-
-        Payer parsedPayer = csvLineToPayer(row);
-        parsedPayer.payerAdjustment = buildPayerAdjustment();
-
-        // Put the payer in their correct List/Map based on Government/Private.
-        if (parsedPayer.ownership.equalsIgnoreCase("government")) {
-          // Government payers go in a map, allowing for easy retrieval of specific gov payers.
-          Payer.governmentPayers.put(parsedPayer.getName(), parsedPayer);
-        } else {
-          // Private payers go in a list.
-          Payer.privatePayers.add(parsedPayer);
-        }
-      }
-    }
-  }
-
-  /**
-   * Given a line of parsed CSV input, convert the data into a Payer.
-   *
-   * @param line read a csv line to a payer's attributes
-   * @return the new payer.
-   */
-  private static Payer csvLineToPayer(Map<String, String> line) {
-
-    // Uses .remove() instead of .get() so we can iterate over the remaining keys later.
-    Payer newPayer = new Payer(line.remove("name"), line.remove("id"));
-    newPayer.statesCovered = commaSeparatedStringToHashSet(line.remove("states_covered"));
-    newPayer.servicesCovered = commaSeparatedStringToHashSet(line.remove("services_covered"));
-    newPayer.deductible = Double.parseDouble(line.remove("deductible"));
-    newPayer.defaultCoinsurance = Double.parseDouble(line.remove("default_coinsurance"));
-    newPayer.defaultCopay = Double.parseDouble(line.remove("default_copay"));
-    newPayer.monthlyPremium = Double.parseDouble(line.remove("monthly_premium"));
-    newPayer.ownership = line.remove("ownership");
-    // Add remaining columns we didn't map to first-class fields to payer's attributes map.
-    for (Map.Entry<String, String> e : line.entrySet()) {
-      newPayer.attributes.put(e.getKey(), e.getValue());
-    }
-    return newPayer;
-  }
-
-  /**
-   * Given a comma seperated string, convert the data into a Set.
-   *
-   * @param field the string to extract the Set from.
-   * @return the HashSet of services covered.
-   */
-  private static Set<String> commaSeparatedStringToHashSet(String field) {
-    String[] commaSeparatedField = field.split("\\s*,\\s*");
-    List<String> parsedValues = Arrays.stream(commaSeparatedField).collect(Collectors.toList());
-    return new HashSet<String>(parsedValues);
-  }
-
-  /**
-   * Loads the noInsurance Payer.
-   */
-  public static void loadNoInsurance() {
-    noInsurance = new Payer("NO_INSURANCE", "000000");
-    noInsurance.ownership = "NO_INSURANCE";
-    noInsurance.deductible = 0.0;
-    noInsurance.defaultCoinsurance = 0.0;
-    noInsurance.defaultCopay = 0.0;
-    noInsurance.monthlyPremium = 0.0;
-    noInsurance.payerAdjustment = new PayerAdjustmentNone();
-    // noInsurance does not cover any services.
-    noInsurance.servicesCovered = new HashSet<String>();
-    // noInsurance 'covers' all states.
-    noInsurance.statesCovered = new HashSet<String>();
-    noInsurance.statesCovered.add("*");
-  }
-
-  /**
-   * Determines the algorithm to use for patients to find a Payer.
-   */
-  private static IPayerFinder buildPayerFinder() {
-    IPayerFinder finder;
-    String behavior = Config.get("generate.payers.selection_behavior").toLowerCase();
-    switch (behavior) {
-      case BESTRATE:
-        finder = new PayerFinderBestRates();
-        break;
-      case RANDOM:
-        finder = new PayerFinderRandom();
-        break;
-      default:
-        throw new RuntimeException("Not a valid Payer Selection Algorithm: " + behavior);
-    }
-    return finder;
-  }
-
-  private static IPayerAdjustment buildPayerAdjustment() {
-    IPayerAdjustment adjustment;
-    String behavior = Config.get("generate.payers.adjustment_behavior", "none").toLowerCase();
-    String rateString = Config.get("generate.payers.adjustment_rate", "0.05");
-    double rate = Double.parseDouble(rateString);
-    switch (behavior) {
-      case NONE:
-        adjustment = new PayerAdjustmentNone();
-        break;
-      case FIXED:
-        adjustment = new PayerAdjustmentFixed(rate);
-        break;
-      case RANDOM:
-        adjustment = new PayerAdjustmentRandom(rate);
-        break;
-      default:
-        adjustment = new PayerAdjustmentNone();
-    }
-    return adjustment;
-  }
-
-  /**
-   * Returns the list of all loaded private payers.
-   */
-  public static List<Payer> getPrivatePayers() {
-    return Payer.privatePayers;
-  }
-
-  /**
-   * Returns the List of all loaded government payers.
-   */
-  public static List<Payer> getGovernmentPayers() {
-    return Payer.governmentPayers.values().stream().collect(Collectors.toList());
-  }
-
-  /**
-   * Returns a List of all loaded payers.
-   */
-  public static List<Payer> getAllPayers() {
-    List<Payer> allPayers = new ArrayList<>();
-    allPayers.addAll(Payer.getGovernmentPayers());
-    allPayers.addAll(Payer.getPrivatePayers());
-    return allPayers;
-  }
-
-  /**
-   * Returns the government payer with the given name.
-   *
-   * @param governmentPayerName the government payer to get.
-   * @return returns null if the government payer does not exist.
-   */
-  public static Payer getGovernmentPayer(String governmentPayerName) {
-    return Payer.governmentPayers.get(governmentPayerName);
-  }
-
-  /**
-   * Clear the list of loaded and cached Payers.
-   * Currently only used in tests.
-   */
-  public static void clear() {
-    governmentPayers.clear();
-    privatePayers.clear();
-    statesLoaded.clear();
-    payerFinder = buildPayerFinder();
-  }
-
-  /**
-   * Returns a Payer that the person can qualify for.
-   *
-   * @param person the person who needs to find insurance.
-   * @param service the EncounterType the person would like covered.
-   * @param time the time that the person requires insurance.
-   * @return a payer who the person can accept and vice versa.
-   */
-  public static Payer findPayer(Person person, EncounterType service, long time) {
-    return Payer.payerFinder.find(Payer.getPrivatePayers(), person, service, time);
+  public void addPlan(InsurancePlan newPlan) {
+    this.plans.add(newPlan);
   }
 
   /**
@@ -386,34 +150,15 @@ public class Payer implements Serializable {
 
   /**
    * Returns the name of the payer.
+   * @return the name.
    */
   public String getName() {
     return this.name;
   }
 
   /**
-   * Returns the monthly premium of the payer.
-   */
-  public double getMonthlyPremium() {
-    return this.monthlyPremium;
-  }
-
-  /**
-   * Returns the yearly deductible of this payer.
-   */
-  public double getDeductible() {
-    return this.deductible;
-  }
-
-  /**
-   * Returns the Coinsurance of this payer.
-   */
-  public double getCoinsurance() {
-    return this.defaultCoinsurance;
-  }
-
-  /**
-   * Returns the ownserhip type of the payer (Government/Private).
+   * Returns the ownership type of the payer (Government/Private).
+   * @return the ownership type.
    */
   public String getOwnership() {
     return this.ownership;
@@ -421,96 +166,28 @@ public class Payer implements Serializable {
 
   /**
    * Returns the Map of the payer's second class attributes.
+   * @return any second-class attributes.
    */
   public Map<String, Object> getAttributes() {
     return attributes;
   }
 
   /**
-   * Returns whether a payer will accept the given patient at this time. Currently returns
-   * true by default, except for Medicare/Medicaid which have hardcoded requirements.
-   *
-   * @param person Person to consider
-   * @param time   Time the person seeks care
-   * @return whether or not the payer will accept this patient as a customer
+   * Returns the set of plans offered by this payer.
+   * @return the set of plans.
    */
-  public boolean accepts(Person person, long time) {
-
-    // For now, assume that all payers accept all patients EXCEPT Medicare/Medicaid.
-    if (this.name.equals("Medicare")) {
-      boolean esrd = (person.attributes.containsKey("end_stage_renal_disease")
-          && (boolean) person.attributes.get("end_stage_renal_disease"));
-      boolean sixtyFive = (person.ageInYears(time) >= 65);
-
-      boolean medicareEligible = sixtyFive || esrd;
-      return medicareEligible;
-
-    } else if (this.name.equals("Medicaid")) {
-      boolean female = (person.attributes.get(Person.GENDER).equals("F"));
-      boolean pregnant = (person.attributes.containsKey("pregnant")
-          && (boolean) person.attributes.get("pregnant"));
-      boolean blind = (person.attributes.containsKey(Person.BLINDNESS)
-          && (boolean) person.attributes.get(Person.BLINDNESS));
-      int income = (Integer) person.attributes.get(Person.INCOME);
-      boolean medicaidIncomeEligible = (income <= HealthInsuranceModule.medicaidLevel);
-
-      boolean medicaidEligible = (female && pregnant) || blind || medicaidIncomeEligible;
-      return medicaidEligible;
-    }
-    // The payer is not Medicare/Medicaid so they will accept any and every person. For now.
-    return true;
-  }
-
-  /**
-   * Returns whether the payer covers the given service.
-   *
-   * @param service the entry type to check
-   * @return whether the payer covers the given service
-   */
-  public boolean coversService(String service) {
-    return service == null
-        || this.servicesCovered.contains(service)
-        || this.servicesCovered.contains("*");
-  }
-
-  /**
-   * Is the given Provider in this Payer's network?.
-   * Currently just returns true until Networks are implemented.
-   *
-   * @param provider Provider to consider
-   * @return whether or not the provider is in the payer network
-   */
-  public boolean isInNetwork(Provider provider) {
-    return true;
+  public List<InsurancePlan> getPlans() {
+    return this.plans;
   }
 
   /**
    * Returns whether or not this payer will cover the given entry.
    *
    * @param entry the entry that needs covering.
+   * @return whether this payer covers the care of the entry.
    */
   public boolean coversCare(Entry entry) {
-    // Payer.isInNetwork() always returns true. For Now.
-    return this.coversService(entry.type)
-        && this.isInNetwork(null);
-    // Entry doesn't have a provider but encounter does, need to find a way to get provider.
-  }
-
-  /**
-   * Determines the copay owed for this Payer based on the type of entry.
-   * For now, this returns a default copay. But in the future there will be different
-   * copays depending on the encounter type covered. If the entry is a wellness visit
-   * and the time is after the mandate year, then the copay is $0.00.
-   *
-   * @param entry the entry to calculate the copay for.
-   */
-  public double determineCopay(Entry entry) {
-    double copay = this.defaultCopay;
-    if (entry.type.equalsIgnoreCase(EncounterType.WELLNESS.toString())
-        && entry.start > HealthInsuranceModule.mandateTime) {
-      copay = 0.0;
-    }
-    return copay;
+    return this.plans.iterator().next().coversService(entry);
   }
 
   /**
@@ -521,30 +198,20 @@ public class Payer implements Serializable {
    * @param person The person making the claim.
    * @return The dollar amount the claim entry was adjusted.
    */
-  public double adjustClaim(ClaimEntry claimEntry, Person person) {
+  public BigDecimal adjustClaim(ClaimEntry claimEntry, Person person) {
     return payerAdjustment.adjustClaim(claimEntry, person);
-  }
-
-  /**
-   * Pays the given premium to the Payer, increasing their revenue.
-   *
-   * @return the monthly premium amount.
-   */
-  public double payMonthlyPremium() {
-    this.revenue += this.monthlyPremium;
-    return this.monthlyPremium;
   }
 
   /**
    * Increments the number of unique users.
    *
-   * @param person the person to add to the payer.
+   * @param personId the person id who utilized the payer.
    */
-  public synchronized void incrementCustomers(Person person) {
-    if (!customerUtilization.containsKey(person.attributes.get(Person.ID))) {
-      customerUtilization.put((String) person.attributes.get(Person.ID), new AtomicInteger(0));
+  public synchronized void incrementCustomers(String personId) {
+    if (!customerUtilization.containsKey(personId)) {
+      customerUtilization.put(personId, new AtomicInteger(0));
     }
-    customerUtilization.get(person.attributes.get(Person.ID)).incrementAndGet();
+    customerUtilization.get(personId).incrementAndGet();
   }
 
   /**
@@ -617,8 +284,8 @@ public class Payer implements Serializable {
    *
    * @param costToPayer the cost of the current encounter, after the patient's copay.
    */
-  public void addCoveredCost(double costToPayer) {
-    this.costsCovered += costToPayer;
+  public void addCoveredCost(BigDecimal costToPayer) {
+    this.costsCovered = this.costsCovered.add(costToPayer);
   }
 
   /**
@@ -626,8 +293,8 @@ public class Payer implements Serializable {
    *
    * @param costToPatient the costs that the payer did not cover.
    */
-  public void addUncoveredCost(double costToPatient) {
-    this.costsUncovered += costToPatient;
+  public void addUncoveredCost(BigDecimal costToPatient) {
+    this.costsUncovered = this.costsUncovered.add(costToPatient);
   }
 
   /**
@@ -642,22 +309,29 @@ public class Payer implements Serializable {
   }
 
   /**
-   * Returns the total amount of money recieved from patients.
+   * Returns the total amount of money received from patients.
    * Consists of monthly premium payments.
+   * @return the total revenue.
    */
-  public double getRevenue() {
+  public BigDecimal getRevenue() {
     return this.revenue;
   }
 
   /**
    * Returns the number of years the given customer was with this Payer.
+   * @param personId  The person to check for.
+   * @return  The number of years the person was with the payer.
    */
-  public int getCustomerUtilization(Person person) {
-    return customerUtilization.get(person.attributes.get(Person.ID)).get();
+  public int getCustomerUtilization(String personId) {
+    if (!customerUtilization.containsKey(personId)) {
+      return 0;
+    }
+    return customerUtilization.get(personId).get();
   }
 
   /**
    * Returns the total number of unique customers of this payer.
+   * @return the number of unique customers.
    */
   public int getUniqueCustomers() {
     return customerUtilization.size();
@@ -665,6 +339,7 @@ public class Payer implements Serializable {
 
   /**
    * Returns the total number of member years covered by this payer.
+   * @return the number of years covered.
    */
   public int getNumYearsCovered() {
     return this.customerUtilization.values().stream().mapToInt(AtomicInteger::intValue).sum();
@@ -672,6 +347,7 @@ public class Payer implements Serializable {
 
   /**
    * Returns the number of encounters this payer paid for.
+   * @return the number of covered encounters.
    */
   public int getEncountersCoveredCount() {
     return entryUtilization.column("covered-"
@@ -680,6 +356,7 @@ public class Payer implements Serializable {
 
   /**
    * Returns the number of encounters this payer did not cover for their customers.
+   * @return the number of uncovered patient encounters.
    */
   public int getEncountersUncoveredCount() {
     return entryUtilization.column("uncovered-"
@@ -688,6 +365,7 @@ public class Payer implements Serializable {
 
   /**
    * Returns the number of medications this payer paid for.
+   * @return the number of covered medications.
    */
   public int getMedicationsCoveredCount() {
     return entryUtilization.column("covered-"
@@ -696,6 +374,7 @@ public class Payer implements Serializable {
 
   /**
    * Returns the number of medications this payer did not cover for their customers.
+   * @return the number of uncovered patient medications.
    */
   public int getMedicationsUncoveredCount() {
     return entryUtilization.column("uncovered-"
@@ -704,6 +383,7 @@ public class Payer implements Serializable {
 
   /**
    * Returns the number of procedures this payer paid for.
+   * @return the number of covered procedures.
    */
   public int getProceduresCoveredCount() {
     return entryUtilization.column("covered-"
@@ -712,6 +392,7 @@ public class Payer implements Serializable {
 
   /**
    * Returns the number of procedures this payer did not cover for their customers.
+   * @return the number of uncovered patient procedures.
    */
   public int getProceduresUncoveredCount() {
     return entryUtilization.column("uncovered-"
@@ -720,6 +401,7 @@ public class Payer implements Serializable {
 
   /**
    * Returns the number of immunizations this payer paid for.
+   * @return the number of covered immunizations.
    */
   public int getImmunizationsCoveredCount() {
     return entryUtilization.column("covered-"
@@ -728,6 +410,7 @@ public class Payer implements Serializable {
 
   /**
    * Returns the number of immunizations this payer did not cover for their customers.
+   * @return the number of uncovered patient immunizations.
    */
   public int getImmunizationsUncoveredCount() {
     return entryUtilization.column("uncovered-"
@@ -735,21 +418,24 @@ public class Payer implements Serializable {
   }
 
   /**
-   * Returns the amount of money the payer paid to providers.
+   * Returns the amount of money the payer paid for healthcare.
+   * @return the total value of coverage paid.
    */
-  public double getAmountCovered() {
+  public BigDecimal getAmountCovered() {
     return this.costsCovered;
   }
 
   /**
-   * Returns the amount of money the payer did not cover.
+   * Returns the amount of money the payer did not cover.'
+   * @return the total value of uncovered patient healthcare.
    */
-  public double getAmountUncovered() {
+  public BigDecimal getAmountUncovered() {
     return this.costsUncovered;
   }
 
   /**
    * Returns the average of the payer's QOLS of customers over the number of years covered.
+   * @return the average QOLS of the payer's patients.
    */
   public double getQolsAverage() {
     int numYears = this.getNumYearsCovered();
@@ -762,23 +448,11 @@ public class Payer implements Serializable {
     hash = 53 * hash + Objects.hashCode(this.attributes);
     hash = 53 * hash + Objects.hashCode(this.name);
     hash = 53 * hash + Objects.hashCode(this.uuid);
-    hash = 53 * hash + (int) (Double.doubleToLongBits(this.deductible)
-            ^ (Double.doubleToLongBits(this.deductible) >>> 32));
-    hash = 53 * hash + (int) (Double.doubleToLongBits(this.defaultCopay)
-            ^ (Double.doubleToLongBits(this.defaultCopay) >>> 32));
-    hash = 53 * hash + (int) (Double.doubleToLongBits(this.defaultCoinsurance)
-            ^ (Double.doubleToLongBits(this.defaultCoinsurance) >>> 32));
-    hash = 53 * hash + (int) (Double.doubleToLongBits(this.monthlyPremium)
-            ^ (Double.doubleToLongBits(this.monthlyPremium) >>> 32));
     hash = 53 * hash + Objects.hashCode(this.ownership);
     hash = 53 * hash + Objects.hashCode(this.statesCovered);
-    hash = 53 * hash + Objects.hashCode(this.servicesCovered);
-    hash = 53 * hash + (int) (Double.doubleToLongBits(this.revenue)
-            ^ (Double.doubleToLongBits(this.revenue) >>> 32));
-    hash = 53 * hash + (int) (Double.doubleToLongBits(this.costsCovered)
-            ^ (Double.doubleToLongBits(this.costsCovered) >>> 32));
-    hash = 53 * hash + (int) (Double.doubleToLongBits(this.costsUncovered)
-            ^ (Double.doubleToLongBits(this.costsUncovered) >>> 32));
+    hash = 53 * hash + this.revenue.hashCode();
+    hash = 53 * hash + this.costsCovered.hashCode();
+    hash = 53 * hash + this.costsUncovered.hashCode();
     hash = 53 * hash + (int) (Double.doubleToLongBits(this.totalQOLS)
             ^ (Double.doubleToLongBits(this.totalQOLS) >>> 32));
     return hash;
@@ -796,36 +470,20 @@ public class Payer implements Serializable {
       return false;
     }
     final Payer other = (Payer) obj;
-    if (Double.doubleToLongBits(this.deductible)
-            != Double.doubleToLongBits(other.deductible)) {
+    if (!this.revenue.equals(other.revenue)) {
       return false;
     }
-    if (Double.doubleToLongBits(this.defaultCopay)
-            != Double.doubleToLongBits(other.defaultCopay)) {
+    if (!this.costsCovered.equals(other.costsCovered)) {
       return false;
     }
-    if (Double.doubleToLongBits(this.defaultCoinsurance)
-            != Double.doubleToLongBits(other.defaultCoinsurance)) {
-      return false;
-    }
-    if (Double.doubleToLongBits(this.monthlyPremium)
-            != Double.doubleToLongBits(other.monthlyPremium)) {
-      return false;
-    }
-    if (Double.doubleToLongBits(this.revenue)
-            != Double.doubleToLongBits(other.revenue)) {
-      return false;
-    }
-    if (Double.doubleToLongBits(this.costsCovered)
-            != Double.doubleToLongBits(other.costsCovered)) {
-      return false;
-    }
-    if (Double.doubleToLongBits(this.costsUncovered)
-            != Double.doubleToLongBits(other.costsUncovered)) {
+    if (!this.costsUncovered.equals(other.costsUncovered)) {
       return false;
     }
     if (Double.doubleToLongBits(this.totalQOLS)
             != Double.doubleToLongBits(other.totalQOLS)) {
+      return false;
+    }
+    if (!Objects.equals(this.plans, other.plans)) {
       return false;
     }
     if (!Objects.equals(this.name, other.name)) {
@@ -843,11 +501,61 @@ public class Payer implements Serializable {
     if (!Objects.equals(this.statesCovered, other.statesCovered)) {
       return false;
     }
-    if (!Objects.equals(this.servicesCovered, other.servicesCovered)) {
-      return false;
-    }
     return true;
   }
 
+  /**
+   * Sets the payer claim adjustment strategy.
+   * @param payerAdjustment The payer adjustment algorithm.
+   */
+  public void setPayerAdjustment(IPayerAdjustment payerAdjustment) {
+    this.payerAdjustment = payerAdjustment;
+  }
+
+  public boolean isGovernmentPayer() {
+    return this.ownership.equals(PayerManager.GOV_OWNERSHIP);
+  }
+
+  /**
+   * Adds the given revenue to the payer.
+   * @param additionalRevenue The revenue to add.
+   */
+  public void addRevenue(BigDecimal additionalRevenue) {
+    this.revenue = this.revenue.add(additionalRevenue);
+  }
+
+  /**
+   * Returns the government payer plan if this is a government payer.
+   * @return  This payer's government payer plan.
+   */
+  public InsurancePlan getGovernmentPayerPlan() {
+    if (!this.ownership.equals(PayerManager.GOV_OWNERSHIP)) {
+      throw new RuntimeException("Only government payers can call getGovernmentPayerPlan().");
+    }
+    return this.plans.iterator().next();
+  }
+
+  /**
+   * Add additional attributes to Payer.
+   */
+  public void addAttribute(String key, String value) {
+    this.attributes.put(key, value);
+  }
+
+  /**
+   * Returns whether this is the no insurance payer.
+   * @return  Returns whether this is no insurance.
+   */
+  public boolean isNoInsurance() {
+    return this.name.equals(PayerManager.NO_INSURANCE);
+  }
+
+  /**
+   * Returns the plan link id for this payer.
+   * @return  The plan link id.
+   */
+  public int getPlanLinkId() {
+    return this.planLinkId;
+  }
 
 }

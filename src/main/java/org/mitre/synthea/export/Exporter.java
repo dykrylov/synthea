@@ -24,10 +24,12 @@ import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 
 import org.mitre.synthea.engine.Generator;
+import org.mitre.synthea.export.rif.BB2RIFExporter;
 import org.mitre.synthea.helpers.Config;
 import org.mitre.synthea.helpers.Utilities;
-import org.mitre.synthea.input.FixedRecord;
-import org.mitre.synthea.input.FixedRecordGroup;
+import org.mitre.synthea.identity.Entity;
+import org.mitre.synthea.identity.Seed;
+import org.mitre.synthea.identity.Variant;
 import org.mitre.synthea.modules.DeathModule;
 import org.mitre.synthea.world.agents.Person;
 import org.mitre.synthea.world.concepts.Claim;
@@ -127,8 +129,10 @@ public abstract class Exporter {
    * @param stopTime Time at which the simulation stopped
    * @param options Runtime exporter options
    */
-  public static void export(Person person, long stopTime, ExporterRuntimeOptions options) {
+  public static boolean export(Person person, long stopTime, ExporterRuntimeOptions options) {
+    boolean wasExported = false;
     if (options.deferExports) {
+      wasExported = true;
       deferredExports.add(new ImmutablePair<Person, Long>(person, stopTime));
     } else {
       if (options.yearsOfHistory > 0) {
@@ -141,23 +145,21 @@ public abstract class Exporter {
         int i = 0;
         for (String key : person.records.keySet()) {
           person.record = person.records.get(key);
-          // If the person fixed Records, overwrite their attributes from the fixed records.
-          if (person.attributes.get(Person.RECORD_GROUP) != null) {
-            FixedRecordGroup rg = (FixedRecordGroup) person.attributes.get(Person.RECORD_GROUP);
-            int recordToPull = i;
-            if (recordToPull >= rg.count) {
-              recordToPull = rg.count - 1;
-            }
-            FixedRecord fr = rg.records.get(recordToPull);
-            fr.totalOverwrite(person);
+          if (person.attributes.get(Person.ENTITY) != null) {
+            Entity entity = (Entity) person.attributes.get(Person.ENTITY);
+            Seed seed = entity.seedAt(person.record.lastEncounterTime());
+            Variant variant = seed.selectVariant(person);
+            person.attributes.putAll(variant.demographicAttributesForPerson());
           }
-          exportRecord(person, Integer.toString(i), stopTime, options);
+          boolean exported = exportRecord(person, Integer.toString(i), stopTime, options);
+          wasExported = wasExported || exported;
           i++;
         }
       } else {
-        exportRecord(person, "", stopTime, options);
+        wasExported = exportRecord(person, "", stopTime, options);
       }
     }
+    return wasExported;
   }
 
   /**
@@ -180,8 +182,9 @@ public abstract class Exporter {
    * @param stopTime Time at which the simulation stopped
    * @param options Generator's record queue (may be null)
    */
-  private static void exportRecord(Person person, String fileTag, long stopTime,
+  private static boolean exportRecord(Person person, String fileTag, long stopTime,
           ExporterRuntimeOptions options) {
+    boolean wasExported = true;
     if (options.terminologyService) {
       // Resolve any coded values within the record that are specified using a ValueSet URI.
       ValueSetCodeResolver valueSetCodeResolver = new ValueSetCodeResolver(person);
@@ -262,7 +265,7 @@ public abstract class Exporter {
     if (Config.getAsBoolean("exporter.bfd.export")) {
       try {
         BB2RIFExporter exporter = BB2RIFExporter.getInstance();
-        exporter.export(person, stopTime, options.yearsOfHistory);
+        wasExported = exporter.export(person, stopTime, options.yearsOfHistory);
       } catch (IOException e) {
         e.printStackTrace();
       }
@@ -334,6 +337,7 @@ public abstract class Exporter {
         e.printStackTrace();
       }
     }
+    return wasExported;
   }
 
   /**
@@ -354,7 +358,7 @@ public abstract class Exporter {
    * @param file Path to the new file.
    * @param contents The contents of the file.
    */
-  static void overwriteFile(Path file, String contents) {
+  public static void overwriteFile(Path file, String contents) {
     try {
       Files.write(file, Collections.singleton(contents), StandardOpenOption.CREATE,
               StandardOpenOption.TRUNCATE_EXISTING);
@@ -368,7 +372,7 @@ public abstract class Exporter {
    * @param file Path to the new file.
    * @param contents The contents of the file.
    */
-  static void appendToFile(Path file, String contents) {
+  public static void appendToFile(Path file, String contents) {
     PrintWriter writer = fileWriters.get(file);
 
     if (writer == null) {
@@ -430,24 +434,20 @@ public abstract class Exporter {
       deferredExports.clear();
     }
 
-    String bulk = Config.get("exporter.fhir.bulk_data");
-
-    // Before we force bulk data to be off...
     try {
-      FhirGroupExporterR4.exportAndSave(generator, generator.stop);
-    } catch (Exception e) {
-      e.printStackTrace();
-    }
-
-    Config.set("exporter.fhir.bulk_data", "false");
-    try {
-      HospitalExporterR4.export(generator, generator.stop);
+      FhirGroupExporterR4.exportAndSave(generator.getRandomizer(), generator.stop);
     } catch (Exception e) {
       e.printStackTrace();
     }
 
     try {
-      FhirPractitionerExporterR4.export(generator, generator.stop);
+      HospitalExporterR4.export(generator.getRandomizer(), generator.stop);
+    } catch (Exception e) {
+      e.printStackTrace();
+    }
+
+    try {
+      FhirPractitionerExporterR4.export(generator.getRandomizer(), generator.stop);
     } catch (Exception e) {
       e.printStackTrace();
     }
@@ -475,7 +475,6 @@ public abstract class Exporter {
     } catch (Exception e) {
       e.printStackTrace();
     }
-    Config.set("exporter.fhir.bulk_data", bulk);
 
     if (Config.getAsBoolean("exporter.bfd.export")) {
       try {
@@ -483,6 +482,7 @@ public abstract class Exporter {
         exporter.exportNPIs();
         exporter.exportManifest();
         exporter.exportEndState();
+        exporter.exportMissingCodes();
       } catch (IOException e) {
         e.printStackTrace();
       }

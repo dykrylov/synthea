@@ -116,6 +116,7 @@
         "is."
       ],
       "encounter_class": "ambulatory",
+      "telemedicine_possibility": "possible",
       "codes": [
         {
           "system": "SNOMED-CT",
@@ -135,7 +136,8 @@
         {
           "transition": "End_PCP_Visit_For_Food_Allergy"
         }
-      ]
+      ],
+      "reason": "food_allergy"
     },
     "Food_Allergy_CarePlan": {
       "type": "CarePlanStart",
